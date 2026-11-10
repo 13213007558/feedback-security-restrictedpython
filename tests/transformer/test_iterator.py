@@ -163,3 +163,42 @@ def test_RestrictingNodeTransformer__guard_iter__2(mocker):
     assert ret == [3, 7, 11]
     _getiter_.assert_has_calls(call_ref)
     _getiter_.reset_mock()
+
+
+def test_RestrictingNodeTransformer__guard_iter__one_shot_guards(mocker):
+    """Every nested iteration layer still calls ``_getiter_``.
+
+    One-shot iterators (outer and inner) are consumed without
+    materialization but with identical guard coverage.
+    """
+    src = """
+def run(it):
+    out = []
+    for (a, (b, c)) in it:
+        out.append((a, b, c))
+    return out
+"""
+    seen = []
+
+    def _getiter_(it):
+        seen.append(type(it).__name__)
+        return iter(it)
+
+    glb = {
+        '_getiter_': _getiter_,
+        '_iter_unpack_sequence_': guarded_iter_unpack_sequence,
+    }
+    restricted_exec(src, glb)
+
+    def outer():
+        yield iter([1, iter([2, 3])])
+        yield iter([4, iter([5, 6])])
+
+    assert glb['run'](outer()) == [(1, 2, 3), (4, 5, 6)]
+    # The outer generator and every materialized level pass the guard:
+    # 1 outer generator, 2 item iterators, 2 nested child iterators.
+    assert seen == [
+        'generator',
+        'list_iterator', 'list_iterator',
+        'list_iterator', 'list_iterator',
+    ]

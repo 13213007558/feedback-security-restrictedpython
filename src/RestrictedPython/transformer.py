@@ -247,7 +247,7 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
         #               Support for Python 3.12 is dropped.
         return isinstance(ob, ast.Starred)
 
-    def gen_unpack_spec(self, tpl: ast.Tuple) -> ast.Dict:
+    def gen_unpack_spec(self, tpl: ast.Tuple) -> ast.Tuple:
         """Generate a specification for 'guarded_unpack_sequence'.
 
         This spec is used to protect sequence unpacking.
@@ -275,28 +275,24 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
             return t
 
         The 'real' spec for the case above is then:
-            spec = {
-                'min_len': 3,
-                'childs': (
-                    (1, {'min_len': 2, 'childs': ()}),
-                    (2, {
-                            'min_len': 2,
-                            'childs': (
-                                (1, {'min_len': 2, 'childs': ()})
-                            )
-                        }
-                    )
+            spec = (
+                3,
+                (
+                    (1, (2, ())),
+                    (2, (2, ((1, (2, ())),)))
                 )
-            }
+            )
 
         So finally the assignment above is converted into:
             (a, (b, c), (d, (e, f))) = guarded_unpack_sequence(g, spec)
-        """
-        spec = ast.Dict(keys=[], values=[])
 
-        spec.keys.append(ast.Constant('childs'))
-        val0 = ast.Tuple([], ast.Load())
-        spec.values.append(val0)
+        The spec is a tuple (not a dict) so that the whole literal - including
+        the nested specs - is folded into a single constant by the bytecode
+        compiler. A dict literal would be rebuilt (and allocated) every time
+        the surrounding statement or loop body runs.
+        """
+        # Each child is described by ``(index, child_spec)``.
+        childs = ast.Tuple([], ast.Load())
 
         # starred elements in a sequence do not contribute into the min_len.
         # For example a, b, *c = g
@@ -317,12 +313,12 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
                 el = ast.Tuple([], ast.Load())
                 el.elts.append(ast.Constant(idx - offset))
                 el.elts.append(self.gen_unpack_spec(val))
-                val0.elts.append(el)
+                childs.elts.append(el)
 
-        spec.keys.append(ast.Constant('min_len'))
-        spec.values.append(ast.Constant(min_len))
-
-        return spec
+        return ast.Tuple([
+            ast.Constant(min_len),
+            childs,
+        ], ast.Load())
 
     def protect_unpack_sequence(
             self,
@@ -1015,7 +1011,6 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign) -> _T_visit_return:
         """
-
         """
 
         node = self.node_contents_visit(node)
@@ -1036,26 +1031,53 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
         #
         # - Multi targets
         # (a, b) = (c, d) = <exp>
-        # is converted to
-        # (c, d) = _getiter_(<exp>)
-        # (a, b) = _getiter_(<exp>)
-        # Why is this valid ? The original bytecode for this multi targets
-        # behaves the same way.
+        #
+        # Python evaluates the right hand side exactly once and every target
+        # is filled from that single value. Rebuilding the right hand side
+        # expression for each target would evaluate it multiple times (visible
+        # side effects) and would also consume a one-shot iterator before the
+        # later targets run. With more than one target the value is therefore
+        # stored in a temporary variable first:
+        # _tmp = <exp>
+        # (c, d) = _unpack_sequence_(_tmp, spec, _getiter_)
+        # (a, b) = _unpack_sequence_(_tmp, spec, _getiter_)
+        # del _tmp
 
         # ast.NodeTransformer works with list results.
         # He injects it at the right place of the node's parent statements.
         new_nodes = []
+
+        if len(node.targets) > 1:
+            # Evaluate the right hand side once and share the result between
+            # all targets, matching the bytecode Python generates itself.
+            tmp_name = self.gen_tmp_name()
+            tmp_store = ast.Name(tmp_name, ast.Store())
+            copy_locations(tmp_store, node)
+            new_nodes.append(ast.Assign(
+                targets=[tmp_store], value=node.value))
+
+            value: ast.expr = ast.Name(tmp_name, ast.Load())
+            cleanup: list[ast.stmt] = [self.gen_del_stmt(tmp_name)]
+        else:
+            value = node.value
+            cleanup = []
 
         # python fills the right most target first.
         for target in reversed(node.targets):
             if isinstance(target, ast.Tuple):
                 wrapper = ast.Assign(
                     targets=[target],
-                    value=self.protect_unpack_sequence(target, node.value))
+                    value=self.protect_unpack_sequence(target, value))
                 new_nodes.append(wrapper)
             else:
-                new_node = ast.Assign(targets=[target], value=node.value)
+                new_node = ast.Assign(targets=[target], value=value)
                 new_nodes.append(new_node)
+
+        if cleanup:
+            wrapped = ast.Try(
+                body=new_nodes[1:], finalbody=cleanup,
+                handlers=[], orelse=[])
+            new_nodes = [new_nodes[0], wrapped]
 
         for new_node in new_nodes:
             copy_locations(new_node, node)

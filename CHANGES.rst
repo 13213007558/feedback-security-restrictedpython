@@ -4,7 +4,13 @@ Changes
 9.1 (unreleased)
 ----------------
 
-- Nothing changed yet.
+- Optimize guarded sequence unpacking. The unpack specification is now a
+  nested tuple constant instead of a dict rebuilt on every execution, flat
+  targets consume the guarded iterator directly without an intermediate
+  ``list()``, and chained multi-target assignment evaluates the right hand
+  side only once, matching native Python semantics. Custom
+  ``_unpack_sequence_`` implementations still receive the new tuple spec;
+  the shipped guard also accepts the previous dict spec.
 
 
 9.0 (2026-11-04)
