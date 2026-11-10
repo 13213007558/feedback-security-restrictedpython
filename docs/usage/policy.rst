@@ -36,6 +36,8 @@ RestrictedPython predefines several guarded access and manipulation methods:
 * ``guarded_delattr``
 * ``guarded_iter_unpack_sequence``
 * ``guarded_unpack_sequence``
+* ``_guarded_inplace_aug_attr``
+* ``_guarded_inplace_aug_item``
 
 Those and additional methods rely on a helper construct ``full_write_guard``, which is intended to help implement immutable and semi mutable objects and attributes.
 
@@ -64,6 +66,68 @@ Specifically:
    object passed to it may be written to, it should be returned,
    otherwise the guard function should raise an exception.  ``_write_``
    is typically called on an object before a ``setattr`` operation.
+
+Guarded augmented assignment of attributes and items
+.....................................................
+
+By default augmented assignment is only allowed for simple names
+(``total += 1`` becomes ``total = _inplacevar_("+=", total, 1)``).
+Statements that mutate an attribute or an item in place
+(``object.attr += value`` and ``object[key] += value``, including
+slices) are rejected at compile time, because the in-place operation
+(``__iadd__`` and its peers) would run before a write guard could
+intervene.
+
+A trusted policy may opt in by providing a node transformer subclass
+that sets ``allow_guarded_augassign`` to ``True``::
+
+    from RestrictedPython.transformer import RestrictingNodeTransformer
+
+
+    class TrustedPolicy(RestrictingNodeTransformer):
+        allow_guarded_augassign = True
+
+The statements are then rewritten to calls of two additional policy
+guards.  Both receive a zero argument *getter* callable instead of the
+already evaluated current value, so the read can be delayed until after
+the write authorization::
+
+    _inplace_aug_attr_(object, name, getter, value, operator)
+    _inplace_aug_item_(object, key, getter, value, operator)
+
+A guard must implement this order:
+
+1. authorize the write (raise if the object must not be mutated),
+2. call ``getter()`` to read the current value,
+3. apply the in-place ``operator``,
+4. write the result back via the authorized object.
+
+Authorizing the write first is mandatory: if the guard rejected the
+write only at the final write-back, the in-place operation had already
+mutated the object and could not be undone.  The object expression, the
+index/slice expression and the right hand side are each evaluated
+exactly once.  On rejection no business modification happens and the
+generated temporary variables are removed again.
+
+Reference factories wrapping an existing write guard are shipped with
+:mod:`RestrictedPython.Guards`::
+
+    from RestrictedPython.Guards import _guarded_inplace_aug_attr
+    from RestrictedPython.Guards import _guarded_inplace_aug_item
+
+    restricted_globals['_inplace_aug_attr_'] = _guarded_inplace_aug_attr(
+        write_guard)
+    restricted_globals['_inplace_aug_item_'] = _guarded_inplace_aug_item(
+        write_guard)
+
+The write guard passed to these factories has to raise as soon as an
+object is not writable; merely returning a wrapper that fails at
+write-back time is too late, because the in-place operation already ran.
+
+If an execution environment compiles code with the opt-in policy but
+does not provide one of the guards, the statement fails with a
+``NameError`` instead of falling back to an unguarded in-place
+operation.
 
 3. ``_getattr_`` and ``_getitem_`` are guard functions, each of which
    takes two arguments.  The first is the base object to be accessed,

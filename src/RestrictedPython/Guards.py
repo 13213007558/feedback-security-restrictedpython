@@ -16,7 +16,9 @@
 # DocumentTemplate.DT_UTil contains a few.
 
 import builtins
+import operator
 import string
+import typing
 
 from RestrictedPython.transformer import INSPECT_ATTRIBUTES
 
@@ -223,6 +225,66 @@ def _full_write_guard():
 
 
 full_write_guard = _full_write_guard()  # type: ignore[no-untyped-call]
+
+
+# Mapping from the augmented assignment operator strings emitted by the
+# transformer to the in-place operator implementations.
+_INPLACE_OPERATORS: dict[str, typing.Any] = {
+    '+=': operator.iadd,
+    '-=': operator.isub,
+    '*=': operator.imul,
+    '/=': operator.itruediv,
+    '%=': operator.imod,
+    '**=': operator.ipow,
+    '<<=': operator.ilshift,
+    '>>=': operator.irshift,
+    '|=': operator.ior,
+    '^=': operator.ixor,
+    '&=': operator.iand,
+    '//=': operator.ifloordiv,
+    '@=': operator.imatmul,
+}
+
+
+def _guarded_inplace_aug_attr(write_guard):
+    """Create a guard for ``object.attr += value`` statements.
+
+    ``getter`` is a zero argument callable that reads the current
+    attribute value.  The returned guard implements the order required by
+    the trusted policy: the write authorization (``write_guard(object)``)
+    happens *before* the getter or the in-place operation are touched, so
+    a denied write cannot leave an in-place modification behind. Only
+    afterwards the current value is read, the in-place operation is
+    applied and the result is written back.
+    """
+
+    def guard(object, name, getter, value, operator_str):
+        writable = write_guard(object)
+        current = getter()
+        new_value = _INPLACE_OPERATORS[operator_str](current, value)
+        setattr(writable, name, new_value)
+        return new_value
+
+    return guard
+
+
+def _guarded_inplace_aug_item(write_guard):
+    """Create a guard for ``object[key] += value`` statements (and slices).
+
+    As with :func:`_guarded_inplace_aug_attr`, the write is authorized
+    first, before the lazy getter (and therefore ``__getitem__`` or the
+    in-place operator) runs.  A rejected write thus guarantees that
+    ``__iadd__`` and its peers are never called.
+    """
+
+    def guard(object, key, getter, value, operator_str):
+        writable = write_guard(object)
+        current = getter()
+        new_value = _INPLACE_OPERATORS[operator_str](current, value)
+        writable[key] = new_value
+        return new_value
+
+    return guard
 
 
 def guarded_setattr(object, name, value):

@@ -4,7 +4,22 @@ Changes
 9.1 (unreleased)
 ----------------
 
-- Nothing changed yet.
+- Allow trusted policies to opt into guarded augmented assignment of
+  attributes, items and slices (``object.attr += value`` and
+  ``object[key] += value``) by setting
+  ``RestrictingNodeTransformer.allow_guarded_augassign = True``.  The
+  statements are rewritten to calls of the new ``_inplace_aug_attr_`` /
+  ``_inplace_aug_item_`` policy guards.  The guard authorizes the write
+  before the lazy getter, the in-place operation and the write-back run,
+  so a denied write guarantees that ``__iadd__`` and its peers are never
+  called.  The object, index and right hand side are evaluated exactly
+  once, slices follow the same rule, and generated temporary variables
+  are removed again.  The default policy keeps rejecting these
+  statements, and environments missing the new guards fail with a
+  ``NameError`` instead of falling back to unguarded access.  Reference
+  guard factories are provided as
+  ``RestrictedPython.Guards._guarded_inplace_aug_attr`` and
+  ``_guarded_inplace_aug_item``.
 
 
 9.0 (2026-11-04)
