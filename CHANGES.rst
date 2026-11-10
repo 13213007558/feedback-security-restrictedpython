@@ -4,7 +4,16 @@ Changes
 9.1 (unreleased)
 ----------------
 
-- Nothing changed yet.
+- Add an opt-in ``RestrictedMatchNodeTransformer`` policy which supports a
+  restricted subset of the ``match`` statement: constant/value, singleton,
+  capture, OR, sequence and mapping patterns. Class patterns stay rejected.
+  The policy never compiles a raw ``Match`` AST node; patterns are converted
+  into data specifications evaluated by the new
+  ``Guards.guarded_match_pattern`` runtime helper, which routes all
+  iteration, subscripting and attribute access through the ``_getiter_``,
+  ``_getitem_`` and ``_getattr_`` guards. The default policy continues to
+  reject the ``match`` statement. Enabling the policy is not a process
+  isolation sandbox.
 
 
 9.0 (2026-11-04)

@@ -18,6 +18,15 @@
 import builtins
 import string
 
+from RestrictedPython.match_policy import _AS
+from RestrictedPython.match_policy import _CAPTURE
+from RestrictedPython.match_policy import _MAPPING
+from RestrictedPython.match_policy import _OR
+from RestrictedPython.match_policy import _SEQUENCE
+from RestrictedPython.match_policy import _SINGLETON
+from RestrictedPython.match_policy import _STAR
+from RestrictedPython.match_policy import _VALUE
+from RestrictedPython.match_policy import _WILDCARD
 from RestrictedPython.transformer import INSPECT_ATTRIBUTES
 
 
@@ -323,6 +332,164 @@ def guarded_unpack_sequence(it, spec, _getiter_):
         ret[idx] = guarded_unpack_sequence(ret[idx], child_spec, _getiter_)
 
     return ret
+
+
+# Tags used by the pattern matching specification created by
+# ``RestrictedPython.match_policy`` are imported at the top of this module
+# so the transformer and the runtime helper share a single definition.
+
+
+def guarded_match_pattern(
+        subject, spec, _getiter_, _getitem_, _getattr_):
+    """Match ``subject`` against the data specification ``spec``.
+
+    The specification is a tuple whose first element is one of the
+    pattern tag constants defined in ``RestrictedPython.match_policy``.
+    On a successful match a mapping of captured names is returned,
+    otherwise ``None`` is returned.
+
+    Every iteration, subscript or attribute access needed to decide the
+    match goes through the corresponding guard.  Bindings of an
+    alternative which fails are discarded, so a failed match never
+    leaks partially collected names.
+
+    Sequence patterns only match ``list`` and ``tuple`` (and mapping
+    patterns only ``dict`` subclasses), mirroring the type gates of
+    CPython's native pattern matching.
+    """
+    return _guarded_match(
+        subject, spec, _getiter_, _getitem_, _getattr_, {})
+
+
+def _guarded_match(subject, spec, _getiter_, _getitem_, _getattr_,
+                   bindings):
+    tag = spec[0]
+
+    if tag == _WILDCARD:
+        return bindings
+
+    if tag == _CAPTURE:
+        if spec[1] != '_':
+            bindings[spec[1]] = subject
+        return bindings
+
+    if tag == _VALUE:
+        # Equality only, ``True == 1`` matches a value pattern but the
+        # singleton patterns below use identity.
+        if subject == spec[1]:
+            return bindings
+        return None
+
+    if tag == _SINGLETON:
+        if subject is spec[1]:
+            return bindings
+        return None
+
+    if tag == _AS:
+        result = _guarded_match(
+            subject, spec[1], _getiter_, _getitem_, _getattr_, bindings)
+        if result is not None and spec[2] is not None:
+            result[spec[2]] = subject
+        return result
+
+    if tag == _OR:
+        for alternative in spec[1]:
+            # Each alternative starts from a copy of the bindings
+            # collected so far; its own bindings are thrown away when
+            # it does not match.
+            candidate = _guarded_match(
+                subject, alternative, _getiter_, _getitem_,
+                _getattr_, dict(bindings))
+            if candidate is not None:
+                return candidate
+        return None
+
+    if tag == _SEQUENCE:
+        # Mirror CPython: only lists and tuples are sequence patterns;
+        # strings, ranges and other ``Sequence`` implementations do not
+        # match.
+        if not isinstance(subject, (list, tuple)):
+            return None
+        elements = spec[1]
+        star_index = None
+        fixed = 0
+        for index, element in enumerate(elements):
+            if element[0] == _STAR:
+                star_index = index
+            else:
+                fixed += 1
+        if star_index is None:
+            if len(subject) != fixed:
+                return None
+        elif len(subject) < fixed:
+            return None
+
+        # Materialise once through the iteration guard.  Indexing this
+        # local list afterwards needs no further guard, exactly like
+        # ``guarded_unpack_sequence``.
+        items = list(_getiter_(subject))
+        for index, element in enumerate(elements):
+            if star_index is None:
+                item = items[index]
+            elif element[0] == _STAR:
+                if star_index == len(elements) - 1:
+                    star_value = items[index:]
+                elif index == 0:
+                    star_value = items[:len(items) - fixed]
+                else:
+                    after = len(elements) - index - 1
+                    star_value = items[index:len(items) - after]
+                if element[1] is not None and element[1] != '_':
+                    bindings[element[1]] = star_value
+                continue
+            elif index < star_index:
+                item = items[index]
+            else:
+                item = items[index - len(elements)]
+            result = _guarded_match(
+                item, element, _getiter_, _getitem_, _getattr_,
+                bindings)
+            if result is None:
+                return None
+        return bindings
+
+    if tag == _MAPPING:
+        # Mirror CPython: only ``dict`` subclasses are mapping patterns.
+        if not isinstance(subject, dict):
+            return None
+        keys, value_specs, rest = spec[1], spec[2], spec[3]
+        present = []
+        matched_values = []
+        for key in keys:
+            # Presence check and value retrieval both go through the
+            # subscript guard; a missing key raises ``KeyError``.
+            try:
+                value = _getitem_(subject, key)
+            except KeyError:
+                return None
+            present.append(key)
+            matched_values.append(value)
+        for value, value_spec in zip(matched_values, value_specs):
+            result = _guarded_match(
+                value, value_spec, _getiter_, _getitem_, _getattr_,
+                bindings)
+            if result is None:
+                return None
+        if rest is not None:
+            # The remaining items are collected through the iteration
+            # guard, so a custom mapping cannot run unguarded code.
+            leftover = {
+                key: value
+                for key, value in _getiter_(subject.items())
+                if key not in present
+            }
+            if rest != '_':
+                bindings[rest] = leftover
+        return bindings
+
+    # Unknown tags are a programming error in the transformer, not a
+    # user supplied value.
+    raise ValueError('Unknown match specification tag: %r' % (tag,))
 
 
 safe_globals = {'__builtins__': safe_builtins}

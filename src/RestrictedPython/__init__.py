@@ -38,5 +38,8 @@ from RestrictedPython.compile import CompileResult  # isort:skip
 # Policy
 from RestrictedPython.transformer import RestrictingNodeTransformer  # isort:skip
 
+# Opt-in policy allowing a restricted subset of pattern matching.
+from RestrictedPython.match_policy import RestrictedMatchNodeTransformer  # isort:skip
+
 #
 from RestrictedPython.Eval import RestrictionCapableEval
