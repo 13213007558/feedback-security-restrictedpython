@@ -63,6 +63,11 @@ To do so:
     All AST Nodes without an explicit ``visit_<AST Node>`` method, are denied by default.
     So the usage of this expression and functionality is not allowed.
 
+  * Record the decision (allowed with guard evidence, denied, or unhandled)
+    in ``/tests/ast_coverage/policy.py``, following
+    :ref:`new_node_checklist`. The node coverage tests fail until every node
+    the new interpreter exposes has a compilable piece of evidence.
+
 * Check the documentation for `inspect <https://docs.python.org/3/library/inspect.html>`_ and adjust the ``transformer.py:INSPECT_ATTRIBUTES`` list.
 * Add a corresponding changelog entry.
 * Additionally modify ``.meta.toml`` and run the ``meta/config`` script (for details see: https://github.com/mgedmin/check-python-versions) to update the following files:
@@ -104,6 +109,7 @@ A (modified style) Copy of all Abstract Grammar Definitions for the Python versi
    changes_from312to313
    changes_from313to314
    changes_from314to315
+   ast_node_coverage
 
 .. _understand:
 

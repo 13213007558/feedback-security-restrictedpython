@@ -4,7 +4,11 @@ Changes
 9.1 (unreleased)
 ----------------
 
-- Nothing changed yet.
+- Add an executable AST node coverage check in ``tests/ast_coverage``. It
+  enumerates the node classes of the running interpreter and requires an
+  explicit, evidence-backed decision (allowed with a proven guard, denied, or
+  unhandled/default-denied) for each one, failing with the missing strategy
+  and the ``generic_visit`` source location when a new node is not recorded.
 
 
 9.0 (2026-11-04)
