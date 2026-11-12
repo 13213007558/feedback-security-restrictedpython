@@ -175,7 +175,9 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
     def __init__(self,
                  errors: list[str] | None = None,
                  warnings: list[str] | None = None,
-                 used_names: dict[str, bool] | None = None):
+                 used_names: dict[str, bool] | None = None,
+                 *,
+                 with_guard: bool = False):
         super().__init__()
         self.errors = [] if errors is None else errors
         self.warnings = [] if warnings is None else warnings
@@ -189,6 +191,11 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
 
         # Global counter to construct temporary variable names.
         self._tmp_idx = 0
+
+        # When enabled, every context expression of a synchronous ``with``
+        # statement is wrapped in a call to the host provided ``_with_``
+        # guard before the resulting object is entered.
+        self.with_guard = with_guard
 
         self.print_info = PrintInfo()
 
@@ -1186,8 +1193,39 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
         return node
 
     def visit_With(self, node: ast.With) -> _T_visit_return:
-        """Protect tuple unpacking on with statements."""
+        """Protect tuple unpacking on with statements.
+
+        If the ``with_guard`` policy option is enabled, each context
+        expression is additionally handed to the host supplied ``_with_``
+        guard before the object is entered::
+
+            with <expr> as target:
+                ...
+
+        becomes::
+
+            with _with_(<expr>) as target:
+                ...
+
+        Only the evaluation of the context expression and the call to
+        ``_with_`` are added.  The statement itself stays a real ``with``
+        statement, so entering and exiting the managers (including the
+        ``as`` bindings, multi-item ordering and exception handling) keeps
+        the exact semantics defined by Python.
+        """
         node = self.node_contents_visit(node)
+
+        if self.with_guard:
+            # The injected name follows the same convention as the other
+            # host supplied guards and is protected by ``check_name``.
+            self.used_names['_with_'] = True
+            for item in node.items:
+                guarded_context_expr = ast.Call(
+                    func=ast.Name('_with_', ast.Load()),
+                    args=[item.context_expr],
+                    keywords=[])
+                copy_locations(guarded_context_expr, item.context_expr)
+                item.context_expr = guarded_context_expr
 
         for item in reversed(node.items):
             if isinstance(item.optional_vars, ast.Tuple):
@@ -1324,3 +1362,29 @@ class RestrictingNodeTransformer(ast.NodeTransformer):
                 node,
                 "Assignment expressions are only allowed for simple targets")
         return node
+
+
+class RestrictingWithGuardNodeTransformer(RestrictingNodeTransformer):
+    """Policy which routes synchronous ``with`` contexts through ``_with_``.
+
+    Every context expression of a ``with`` statement is passed to the host
+    supplied ``_with_`` callable before its result is entered.  ``_with_``
+    must either return the context manager that is allowed to be used (it
+    may return the original object or a host controlled wrapper) or raise
+    an exception to refuse it.  The exception is raised before
+    ``__enter__`` is called on the refused object.
+
+    This guard only implements the host's admission policy.  Passing an
+    object through ``_with_`` does not make an arbitrary untrusted object
+    safe: the host remains responsible for the objects and wrappers it
+    returns.
+
+    ``async with`` is not affected and stays forbidden.
+    """
+
+    def __init__(self,
+                 errors: list[str] | None = None,
+                 warnings: list[str] | None = None,
+                 used_names: dict[str, bool] | None = None):
+        super().__init__(
+            errors, warnings, used_names, with_guard=True)

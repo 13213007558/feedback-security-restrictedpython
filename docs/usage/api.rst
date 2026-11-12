@@ -137,3 +137,13 @@ This results in an implicit blacklisting of all not allowed AST elements.
 Any possibly new introduced AST element in Python (new language element) will implicitly be blocked and not allowed in RestrictedPython.
 
 So, if new elements should be introduced, an explicit ``visit_<new AST elem>`` is necessary.
+
+RestrictingWithGuardNodeTransformer
++++++++++++++++++++++++++++++++++++
+
+``RestrictingWithGuardNodeTransformer`` subclasses ``RestrictingNodeTransformer``
+and enables the optional ``with`` statement policy: every context expression of
+a synchronous ``with`` statement is wrapped in a call to the host supplied
+``_with_`` guard before the returned object is entered.  See
+:ref:`with_guard` for the semantics and the security limitations.  The base
+policy leaves ``with`` statements unchanged.

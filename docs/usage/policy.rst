@@ -90,6 +90,121 @@ Specifically:
    your restrictions.  A usable "safe" set is
    ``RestrictedPython.Guards.safe_builtins``.
 
+.. _with_guard:
+
+Guarding ``with`` statements with ``_with_``
+...........................................
+
+A bare ``with`` statement calls ``__enter__`` on the object of the context
+expression without consulting any guard.  RestrictedPython therefore ships an
+opt-in policy, :class:`RestrictedPython.RestrictingWithGuardNodeTransformer`,
+which routes every context expression of a *synchronous* ``with`` statement
+through a host supplied ``_with_`` callable::
+
+    with <expression> as target:
+        ...
+
+is compiled as if it had been written::
+
+    with _with_(<expression>) as target:
+        ...
+
+``_with_`` is an admission check, nothing more:
+
+* it receives the object the context expression evaluated to, *before*
+  ``__enter__`` is called;
+* it returns the context manager that may actually be entered — either the
+  original object or a host controlled wrapper, for example a checked proxy;
+* or it raises an exception to refuse the object.  The exception propagates
+  before ``__enter__`` runs, and context managers entered earlier in the same
+  statement are exited in the usual reverse order.
+
+The default :class:`~RestrictedPython.RestrictingNodeTransformer` does not
+insert these calls, so existing compilations keep their behaviour.  The
+strategy only changes how the ``with`` statement is compiled; ``as`` bindings,
+multi-item evaluation order, unpacking, exception suppression and
+``return``/``break``/``continue`` unwinding stay handled by CPython itself.
+``async with`` is not covered and remains a compile error.
+
+.. warning::
+
+   Passing an object through ``_with_`` does **not** turn an arbitrary
+   untrusted object into a safe one.  The guard only enforces whatever
+   admission rule the host defines; the host remains fully responsible for the
+   objects and wrappers it returns and for everything reachable through them.
+   See :ref:`security_considerations`.
+
+The name ``_with_`` follows the same convention as the other guards: scripts
+cannot define or rebind it themselves, because names starting with an
+underscore are rejected.
+
+.. testcode:: with_guard
+
+    from RestrictedPython import compile_restricted_exec
+    from RestrictedPython import RestrictingWithGuardNodeTransformer
+    from RestrictedPython.Guards import safer_getattr
+
+    class Denied(RuntimeError):
+        pass
+
+    class Resource:
+        def __init__(self, name, allowed):
+            self.name = name
+            self.allowed = allowed
+            self.events = []
+
+        def __enter__(self):
+            self.events.append('enter ' + self.name)
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.events.append('exit ' + self.name)
+            return False
+
+    def with_guard(obj):
+        if not obj.allowed:
+            raise Denied(f'{obj.name} is not allowed as a context manager')
+        return obj
+
+    source = """
+    def use(resource):
+        with resource as entered:
+            return entered.name
+    """
+
+    result = compile_restricted_exec(
+        source, policy=RestrictingWithGuardNodeTransformer)
+    assert result.errors == ()
+    assert result.used_names['_with_'] is True
+
+    safe_globals = {'_with_': with_guard, '_getattr_': safer_getattr}
+    exec(result.code, safe_globals)
+
+    allowed_resource = Resource('allowed', True)
+    print(safe_globals['use'](allowed_resource))
+    print(allowed_resource.events)
+
+.. testoutput:: with_guard
+
+    allowed
+    ['enter allowed', 'exit allowed']
+
+When the guard refuses, the rejected object's ``__enter__`` never runs:
+
+.. testcode:: with_guard
+
+    refused_resource = Resource('refused', False)
+    try:
+        safe_globals['use'](refused_resource)
+    except Denied as error:
+        print(error)
+    print(refused_resource.events)
+
+.. testoutput:: with_guard
+
+    refused is not allowed as a context manager
+    []
+
 To help illustrate how this works under the covers, here's an example
 function:
 

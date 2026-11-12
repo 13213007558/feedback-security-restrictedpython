@@ -37,6 +37,8 @@ from RestrictedPython.compile import CompileResult  # isort:skip
 
 # Policy
 from RestrictedPython.transformer import RestrictingNodeTransformer  # isort:skip
+from RestrictedPython.transformer import (
+    RestrictingWithGuardNodeTransformer)  # isort:skip
 
 #
 from RestrictedPython.Eval import RestrictionCapableEval

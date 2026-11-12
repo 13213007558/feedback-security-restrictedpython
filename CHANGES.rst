@@ -4,7 +4,17 @@ Changes
 9.1 (unreleased)
 ----------------
 
-- Nothing changed yet.
+- Add an opt-in ``with`` statement policy,
+  ``RestrictedPython.RestrictingWithGuardNodeTransformer``.  When it is used,
+  the context expression of every synchronous ``with`` statement is passed to
+  a host supplied ``_with_`` guard before the object it returns is entered.
+  The guard performs the host's admission check and returns the allowed
+  context manager (or a wrapper) or raises to refuse the object; refusal
+  happens before ``__enter__`` and already entered managers are exited in the
+  normal reverse order.  The default policy and existing compilation entry
+  points keep their previous behaviour, and ``async with`` stays forbidden.
+  The guard is an admission mechanism only: it does not make arbitrary
+  untrusted objects safe.
 
 
 9.0 (2026-11-04)

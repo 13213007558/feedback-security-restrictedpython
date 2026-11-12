@@ -46,6 +46,26 @@ You gain more by auditing what you put into ``globals`` and ``__builtins__``
 than by relying on the guards.
 The guards are a second line of defence, not the boundary.
 
+.. _with_guard_is_admission_only:
+
+The ``_with_`` guard is an admission check, not a sandbox
+.........................................................
+
+The opt-in ``RestrictingWithGuardNodeTransformer`` policy (see
+:ref:`with_guard`) rewrites a synchronous ``with`` statement so that the
+evaluated context object is passed to ``_with_`` before ``__enter__`` is
+called.
+That is the extent of what the guard does.
+
+``_with_`` cannot make an arbitrary untrusted object safe.
+If it returns the object unchanged, the object's own ``__enter__``,
+``__exit__`` and the value bound to the ``as`` target run exactly as ordinary
+CPython would run them, including any attribute or item access they perform
+internally — which the source-level guards never see (see
+:ref:`guards_only_cover_restricted_source`).
+A host that wants real control must return an object it trusts, such as a
+wrapper it implemented itself, and reject everything else.
+
 .. _builtins_that_iterate:
 
 Builtins that iterate bypass ``_getiter_``
